@@ -118,12 +118,44 @@ public class MainActivity extends Activity {
     }
 
     private void openTwoGis() {
-        Intent launch = getPackageManager().getLaunchIntentForPackage("ru.dublgis.dgismobile");
-        if (launch != null) startActivity(launch);
-        else {
-            twoGisStatus.setText("●  2ГИС НЕ НАЙДЕН. УСТАНОВИ ЕГО И ПОВТОРИ.");
-            twoGisStatus.setTextColor(Color.rgb(255,190,70));
+        PackageManager pm = getPackageManager();
+
+        // First try the known official 2GIS package.
+        Intent launch = pm.getLaunchIntentForPackage("ru.dublgis.dgismobile");
+        if (launch != null) {
+            try {
+                startActivity(launch);
+                twoGisStatus.setText("●  ЗАПУСКАЮ 2ГИС...");
+                twoGisStatus.setTextColor(Color.rgb(57,255,145));
+                return;
+            } catch (Exception ignored) { }
         }
+
+        // Fallback: locate the installed launcher activity by its visible app name.
+        Intent query = new Intent(Intent.ACTION_MAIN);
+        query.addCategory(Intent.CATEGORY_LAUNCHER);
+        try {
+            for (android.content.pm.ResolveInfo info : pm.queryIntentActivities(query, 0)) {
+                CharSequence label = info.loadLabel(pm);
+                String name = label == null ? "" : label.toString().toLowerCase(java.util.Locale.ROOT);
+                String pkg = info.activityInfo.packageName;
+                if ((name.contains("2гис") || name.contains("2gis") || pkg.toLowerCase(java.util.Locale.ROOT).contains("dublgis"))
+                        && !pkg.equals(getPackageName())) {
+                    Intent found = new Intent(Intent.ACTION_MAIN);
+                    found.addCategory(Intent.CATEGORY_LAUNCHER);
+                    found.setClassName(pkg, info.activityInfo.name);
+                    try {
+                        startActivity(found);
+                        twoGisStatus.setText("●  ЗАПУСКАЮ 2ГИС: " + label);
+                        twoGisStatus.setTextColor(Color.rgb(57,255,145));
+                        return;
+                    } catch (Exception ignored) { }
+                }
+            }
+        } catch (Exception ignored) { }
+
+        twoGisStatus.setText("●  НЕ УДАЛОСЬ НАЙТИ КНОПКУ ЗАПУСКА 2ГИС. ОТКРОЙ ЕГО ВРУЧНУЮ.");
+        twoGisStatus.setTextColor(Color.rgb(255,190,70));
     }
 
     private void requestLocation() {
