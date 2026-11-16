@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="accessibility_service_description">Считывает только видимый текст на экране 2ГИС, когда ты сам открыл 2ГИС. Данные остаются на телефоне.</string>
+</resources>
