@@ -22,10 +22,6 @@ import android.os.SystemClock;
 import com.googlecode.tesseract.android.TessBaseAPI;
 
 import java.io.File;
-import java.io.FileOutputStream;
-import java.io.InputStream;
-import java.net.HttpURLConnection;
-import java.net.URL;
 import java.nio.ByteBuffer;
 import java.util.concurrent.atomic.AtomicBoolean;
 
@@ -82,7 +78,7 @@ public class ScreenOcrService extends Service {
                 DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR, imageReader.getSurface(), null, handler);
 
         new Thread(this::prepareRussianEnglishOcr, "ocr-model-setup").start();
-        sendText("Захват включён. Загружаются модели русского и английского языков. При первом запуске нужен интернет.");
+        sendText("Захват включён. Подготавливаются встроенные языки русского и английского.");
         return START_NOT_STICKY;
     }
 
@@ -90,53 +86,45 @@ public class ScreenOcrService extends Service {
         try {
             File base = new File(getFilesDir(), "tesseract");
             File tessdata = new File(base, "tessdata");
-            if (!tessdata.exists() && !tessdata.mkdirs()) throw new Exception("Не удалось создать папку языковых моделей");
-            downloadModel(tessdata, "rus");
-            downloadModel(tessdata, "eng");
+            if (!tessdata.exists() && !tessdata.mkdirs()) {
+                throw new Exception("Не удалось создать папку языковых моделей");
+            }
+            copyBundledModel(tessdata, "rus");
+            copyBundledModel(tessdata, "eng");
+
             TessBaseAPI api = new TessBaseAPI();
             if (!api.init(base.getAbsolutePath(), "rus+eng")) {
                 api.end();
-                throw new Exception("Не удалось загрузить языки rus+eng");
+                throw new Exception("Tesseract не смог инициализировать rus+eng. Проверьте файлы моделей в APK.");
             }
             api.setPageSegMode(TessBaseAPI.PageSegMode.PSM_AUTO);
             tess = api;
             modelReady = true;
-            sendText("ГОТОВО: распознавание русского и English включено. Открой 2ГИС.");
+            sendText("ГОТОВО: встроенные языки русского и English включены. Интернет для OCR не нужен. Открой 2ГИС.");
         } catch (Exception e) {
-            sendText("ОШИБКА ЗАГРУЗКИ ЯЗЫКОВ: " + e.getMessage());
+            String reason = e.getClass().getSimpleName() + ": " + String.valueOf(e.getMessage());
+            sendText("ОШИБКА ПОДГОТОВКИ OCR: " + reason);
         }
     }
 
-    private void downloadModel(File directory, String language) throws Exception {
+    private void copyBundledModel(File directory, String language) throws Exception {
         File target = new File(directory, language + ".traineddata");
         if (target.exists() && target.length() > 1000000) return;
-        URL url = new URL("https://raw.githubusercontent.com/tesseract-ocr/tessdata_fast/main/" + language + ".traineddata");
-        HttpURLConnection connection = (HttpURLConnection) url.openConnection();
-        connection.setConnectTimeout(30000);
-        connection.setReadTimeout(90000);
-        connection.setInstanceFollowRedirects(true);
-        connection.setRequestProperty("User-Agent", "AlwaysNearby-Android/0.5.1");
         File temporary = new File(directory, language + ".traineddata.tmp");
-        try {
-            int status = connection.getResponseCode();
-            if (status != HttpURLConnection.HTTP_OK) {
-                throw new Exception("Сервер языков ответил HTTP " + status + " (" + language + ")");
-            }
-            try (InputStream in = connection.getInputStream(); FileOutputStream out = new FileOutputStream(temporary)) {
-                byte[] buffer = new byte[16384];
-                int count;
-                while ((count = in.read(buffer)) != -1) out.write(buffer, 0, count);
-            }
-            if (temporary.length() < 1000000) {
-                throw new Exception("Файл " + language + " слишком маленький: " + temporary.length() + " байт");
-            }
-            if (target.exists()) target.delete();
-            if (!temporary.renameTo(target)) throw new Exception("Не удалось сохранить модель " + language);
-        } catch (Exception e) {
+        try (InputStream in = getAssets().open("tessdata/" + language + ".traineddata");
+             FileOutputStream out = new FileOutputStream(temporary)) {
+            byte[] buffer = new byte[16384];
+            int count;
+            while ((count = in.read(buffer)) != -1) out.write(buffer, 0, count);
+        }
+        if (temporary.length() < 1000000) {
             temporary.delete();
-            throw new Exception("Не удалось скачать " + language + ". Проверь интернет и доступ к raw.githubusercontent.com. " + e.getMessage(), e);
-        } finally {
-            connection.disconnect();
+            throw new Exception("Встроенная модель " + language + " отсутствует или повреждена");
+        }
+        if (target.exists()) target.delete();
+        if (!temporary.renameTo(target)) {
+            temporary.delete();
+            throw new Exception("Не удалось скопировать модель " + language);
         }
     }
 
