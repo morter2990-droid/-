@@ -2,6 +2,7 @@ package ru.alwaysnearby.app;
 
 import android.Manifest;
 import android.app.Activity;
+import android.media.projection.MediaProjectionManager;
 import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
@@ -23,6 +24,8 @@ import android.widget.TextView;
 
 public class MainActivity extends Activity {
     private static final int LOCATION_REQUEST = 42;
+    private static final int SCREEN_CAPTURE_REQUEST = 73;
+    private MediaProjectionManager projectionManager;
     private TextView status, coordinates, twoGisStatus, visibleInfo;
     private LocationManager locationManager;
     private BroadcastReceiver twoGisReceiver;
@@ -32,6 +35,7 @@ public class MainActivity extends Activity {
         getWindow().setStatusBarColor(Color.rgb(5, 12, 10));
         getWindow().setNavigationBarColor(Color.rgb(5, 12, 10));
         locationManager = (LocationManager) getSystemService(LOCATION_SERVICE);
+        projectionManager = (MediaProjectionManager) getSystemService(MEDIA_PROJECTION_SERVICE);
 
         ScrollView scroll = new ScrollView(this);
         LinearLayout root = new LinearLayout(this);
@@ -75,11 +79,28 @@ public class MainActivity extends Activity {
         root.addView(open2gis, buttonParams(12));
         open2gis.setOnClickListener(v -> openTwoGis());
 
+        Button startOcr = makeButton("РАСПОЗНАТЬ ЭКРАН 2ГИС (OCR)");
+        root.addView(startOcr, buttonParams(18));
+        startOcr.setOnClickListener(v -> {
+            twoGisStatus.setText("●  ОЖИДАЮ ТВОЁ РАЗРЕШЕНИЕ НА ЗАХВАТ ЭКРАНА");
+            startActivityForResult(projectionManager.createScreenCaptureIntent(), SCREEN_CAPTURE_REQUEST);
+        });
+
+        Button stopOcr = makeButton("ОСТАНОВИТЬ ЗАХВАТ ЭКРАНА");
+        root.addView(stopOcr, buttonParams(8));
+        stopOcr.setOnClickListener(v -> {
+            Intent stop = new Intent(this, ScreenOcrService.class);
+            stop.setAction(ScreenOcrService.ACTION_STOP);
+            startService(stop);
+            twoGisStatus.setText("●  ЗАХВАТ ЭКРАНА ОСТАНОВЛЕН");
+            twoGisStatus.setTextColor(Color.rgb(255,190,70));
+        });
+
         TextView infoTitle = addText(root, "ИНФОРМАЦИЯ, КОТОРУЮ ВИДИТ ANDROID", 12, Color.rgb(57,255,145), 24);
         infoTitle.setTypeface(Typeface.DEFAULT_BOLD);
         visibleInfo = addText(root, "Пока нет данных. Включи разрешение выше, затем открой 2ГИС и перейди к разделу «Друзья на карте».", 13, Color.WHITE, 10);
 
-        TextView note = addText(root, "Читается только видимый текст, когда 2ГИС открыт тобой. Информация обрабатывается локально на телефоне. Если координаты не отображаются как текст, приложение не сможет получить их этим способом.", 11, Color.rgb(130,150,138), 28);
+        TextView note = addText(root, "Захват экрана начинается только после твоего системного разрешения. Распознавание текста выполняется локально на телефоне. Не вводи пароли и платёжные данные во время захвата. Останови его кнопкой ниже.", 11, Color.rgb(130,150,138), 28);
         note.setGravity(Gravity.CENTER);
 
         setContentView(scroll);
@@ -223,6 +244,26 @@ public class MainActivity extends Activity {
         return new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
     }
     private int dp(int v) { return (int)(v * getResources().getDisplayMetrics().density + 0.5f); }
+
+    @Override protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        super.onActivityResult(requestCode, resultCode, data);
+        if (requestCode == SCREEN_CAPTURE_REQUEST) {
+            if (resultCode == RESULT_OK && data != null) {
+                Intent capture = new Intent(this, ScreenOcrService.class);
+                capture.setAction(ScreenOcrService.ACTION_START);
+                capture.putExtra(ScreenOcrService.EXTRA_RESULT_CODE, resultCode);
+                capture.putExtra(ScreenOcrService.EXTRA_DATA, data);
+                if (Build.VERSION.SDK_INT >= 26) startForegroundService(capture);
+                else startService(capture);
+                twoGisStatus.setText("●  ЗАХВАТ АКТИВЕН — ОТКРОЙ 2ГИС");
+                twoGisStatus.setTextColor(Color.rgb(57,255,145));
+                visibleInfo.setText("Захват экрана активен. Теперь открой 2ГИС и раздел «Друзья на карте». Вернись сюда и нажми «Остановить захват экрана».");
+            } else {
+                twoGisStatus.setText("●  ТЫ НЕ РАЗРЕШИЛ ЗАХВАТ ЭКРАНА");
+                twoGisStatus.setTextColor(Color.rgb(255,190,70));
+            }
+        }
+    }
 
     @Override protected void onResume() {
         super.onResume();
