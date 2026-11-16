@@ -19,8 +19,6 @@ import android.os.HandlerThread;
 import android.os.IBinder;
 import android.os.SystemClock;
 
-import androidx.annotation.Nullable;
-
 import com.googlecode.tesseract.android.TessBaseAPI;
 
 import java.io.File;
@@ -97,7 +95,7 @@ public class ScreenOcrService extends Service {
             downloadModel(tessdata, "eng");
             TessBaseAPI api = new TessBaseAPI();
             if (!api.init(base.getAbsolutePath(), "rus+eng")) {
-                api.recycle();
+                api.end();
                 throw new Exception("Не удалось загрузить языки rus+eng");
             }
             api.setPageSegMode(TessBaseAPI.PageSegMode.PSM_AUTO);
@@ -210,10 +208,10 @@ public class ScreenOcrService extends Service {
     @Override public void onDestroy() {
         stopCapture();
         modelReady = false;
-        if (tess != null) { tess.recycle(); tess = null; }
+        if (tess != null) { tess.end(); tess = null; }
         if (thread != null) thread.quitSafely();
         super.onDestroy();
     }
 
-    @Nullable @Override public IBinder onBind(Intent intent) { return null; }
+    @Override public IBinder onBind(Intent intent) { return null; }
 }
