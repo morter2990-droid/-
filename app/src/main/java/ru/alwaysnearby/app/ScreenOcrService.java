@@ -110,21 +110,33 @@ public class ScreenOcrService extends Service {
     private void downloadModel(File directory, String language) throws Exception {
         File target = new File(directory, language + ".traineddata");
         if (target.exists() && target.length() > 1000000) return;
-        URL url = new URL("https://github.com/tesseract-ocr/tessdata_fast/raw/refs/heads/main/" + language + ".traineddata");
+        URL url = new URL("https://raw.githubusercontent.com/tesseract-ocr/tessdata_fast/main/" + language + ".traineddata");
         HttpURLConnection connection = (HttpURLConnection) url.openConnection();
-        connection.setConnectTimeout(20000);
-        connection.setReadTimeout(60000);
+        connection.setConnectTimeout(30000);
+        connection.setReadTimeout(90000);
         connection.setInstanceFollowRedirects(true);
-        try (InputStream in = connection.getInputStream(); FileOutputStream out = new FileOutputStream(target)) {
-            byte[] buffer = new byte[16384];
-            int count;
-            while ((count = in.read(buffer)) != -1) out.write(buffer, 0, count);
+        connection.setRequestProperty("User-Agent", "AlwaysNearby-Android/0.5.1");
+        File temporary = new File(directory, language + ".traineddata.tmp");
+        try {
+            int status = connection.getResponseCode();
+            if (status != HttpURLConnection.HTTP_OK) {
+                throw new Exception("Сервер языков ответил HTTP " + status + " (" + language + ")");
+            }
+            try (InputStream in = connection.getInputStream(); FileOutputStream out = new FileOutputStream(temporary)) {
+                byte[] buffer = new byte[16384];
+                int count;
+                while ((count = in.read(buffer)) != -1) out.write(buffer, 0, count);
+            }
+            if (temporary.length() < 1000000) {
+                throw new Exception("Файл " + language + " слишком маленький: " + temporary.length() + " байт");
+            }
+            if (target.exists()) target.delete();
+            if (!temporary.renameTo(target)) throw new Exception("Не удалось сохранить модель " + language);
+        } catch (Exception e) {
+            temporary.delete();
+            throw new Exception("Не удалось скачать " + language + ". Проверь интернет и доступ к raw.githubusercontent.com. " + e.getMessage(), e);
         } finally {
             connection.disconnect();
-        }
-        if (target.length() < 1000000) {
-            target.delete();
-            throw new Exception("Модель " + language + " скачалась не полностью");
         }
     }
 
