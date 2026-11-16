@@ -21,11 +21,13 @@ import android.os.SystemClock;
 
 import androidx.annotation.Nullable;
 
-import com.google.mlkit.vision.common.InputImage;
-import com.google.mlkit.vision.text.TextRecognition;
-import com.google.mlkit.vision.text.TextRecognizer;
-import com.google.mlkit.vision.text.latin.TextRecognizerOptions;
+import com.googlecode.tesseract.android.TessBaseAPI;
 
+import java.io.File;
+import java.io.FileOutputStream;
+import java.io.InputStream;
+import java.net.HttpURLConnection;
+import java.net.URL;
 import java.nio.ByteBuffer;
 import java.util.concurrent.atomic.AtomicBoolean;
 
@@ -40,8 +42,9 @@ public class ScreenOcrService extends Service {
     private ImageReader imageReader;
     private HandlerThread thread;
     private Handler handler;
-    private TextRecognizer recognizer;
+    private TessBaseAPI tess;
     private final AtomicBoolean processing = new AtomicBoolean(false);
+    private volatile boolean modelReady = false;
     private long lastFrameAt = 0;
 
     @Override public void onCreate() {
@@ -49,7 +52,6 @@ public class ScreenOcrService extends Service {
         thread = new HandlerThread("screen-ocr");
         thread.start();
         handler = new Handler(thread.getLooper());
-        recognizer = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS);
         createChannel();
     }
 
@@ -80,16 +82,61 @@ public class ScreenOcrService extends Service {
         imageReader.setOnImageAvailableListener(reader -> processFrame(reader), handler);
         virtualDisplay = projection.createVirtualDisplay("AlwaysNearbyOCR", width, height, density,
                 DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR, imageReader.getSurface(), null, handler);
+
+        new Thread(this::prepareRussianEnglishOcr, "ocr-model-setup").start();
+        sendText("Захват включён. Загружаются модели русского и английского языков. При первом запуске нужен интернет.");
         return START_NOT_STICKY;
+    }
+
+    private void prepareRussianEnglishOcr() {
+        try {
+            File base = new File(getFilesDir(), "tesseract");
+            File tessdata = new File(base, "tessdata");
+            if (!tessdata.exists() && !tessdata.mkdirs()) throw new Exception("Не удалось создать папку языковых моделей");
+            downloadModel(tessdata, "rus");
+            downloadModel(tessdata, "eng");
+            TessBaseAPI api = new TessBaseAPI();
+            if (!api.init(base.getAbsolutePath(), "rus+eng")) {
+                api.recycle();
+                throw new Exception("Не удалось загрузить языки rus+eng");
+            }
+            api.setPageSegMode(TessBaseAPI.PageSegMode.PSM_AUTO);
+            tess = api;
+            modelReady = true;
+            sendText("ГОТОВО: распознавание русского и English включено. Открой 2ГИС.");
+        } catch (Exception e) {
+            sendText("ОШИБКА ЗАГРУЗКИ ЯЗЫКОВ: " + e.getMessage());
+        }
+    }
+
+    private void downloadModel(File directory, String language) throws Exception {
+        File target = new File(directory, language + ".traineddata");
+        if (target.exists() && target.length() > 1000000) return;
+        URL url = new URL("https://github.com/tesseract-ocr/tessdata_fast/raw/refs/heads/main/" + language + ".traineddata");
+        HttpURLConnection connection = (HttpURLConnection) url.openConnection();
+        connection.setConnectTimeout(20000);
+        connection.setReadTimeout(60000);
+        connection.setInstanceFollowRedirects(true);
+        try (InputStream in = connection.getInputStream(); FileOutputStream out = new FileOutputStream(target)) {
+            byte[] buffer = new byte[16384];
+            int count;
+            while ((count = in.read(buffer)) != -1) out.write(buffer, 0, count);
+        } finally {
+            connection.disconnect();
+        }
+        if (target.length() < 1000000) {
+            target.delete();
+            throw new Exception("Модель " + language + " скачалась не полностью");
+        }
     }
 
     private void processFrame(ImageReader reader) {
         Image image = null;
         try {
             image = reader.acquireLatestImage();
-            if (image == null || processing.get()) return;
+            if (image == null || processing.get() || !modelReady || tess == null) return;
             long now = SystemClock.elapsedRealtime();
-            if (now - lastFrameAt < 1800) return;
+            if (now - lastFrameAt < 2500) return;
             lastFrameAt = now;
             processing.set(true);
 
@@ -104,25 +151,29 @@ public class ScreenOcrService extends Service {
             Bitmap bitmap = Bitmap.createBitmap(padded, 0, 0, image.getWidth(), image.getHeight());
             padded.recycle();
 
-            recognizer.process(InputImage.fromBitmap(bitmap, 0))
-                .addOnSuccessListener(result -> {
-                    String text = result.getText();
-                    if (text != null && !text.trim().isEmpty()) {
-                        Intent broadcast = new Intent(TwoGisAccessibilityService.ACTION_VISIBLE_TEXT);
-                        broadcast.setPackage(getPackageName());
-                        broadcast.putExtra(TwoGisAccessibilityService.EXTRA_TEXT, "РАСПОЗНАННЫЙ ТЕКСТ ЭКРАНА:\n" + text);
-                        sendBroadcast(broadcast);
-                    }
-                })
-                .addOnCompleteListener(task -> {
-                    bitmap.recycle();
-                    processing.set(false);
-                });
-        } catch (Exception ignored) {
+            try {
+                tess.setImage(bitmap);
+                String recognized = tess.getUTF8Text();
+                if (recognized != null && !recognized.trim().isEmpty()) {
+                    sendText("РАСПОЗНАННЫЙ ТЕКСТ (РУССКИЙ + ENGLISH):\n" + recognized.trim());
+                }
+            } finally {
+                bitmap.recycle();
+                processing.set(false);
+            }
+        } catch (Exception e) {
             processing.set(false);
+            sendText("ОШИБКА OCR: " + e.getMessage());
         } finally {
             if (image != null) image.close();
         }
+    }
+
+    private void sendText(String text) {
+        Intent broadcast = new Intent(TwoGisAccessibilityService.ACTION_VISIBLE_TEXT);
+        broadcast.setPackage(getPackageName());
+        broadcast.putExtra(TwoGisAccessibilityService.EXTRA_TEXT, text);
+        sendBroadcast(broadcast);
     }
 
     private Notification notification() {
@@ -130,16 +181,14 @@ public class ScreenOcrService extends Service {
             return new Notification.Builder(this, CHANNEL)
                     .setSmallIcon(android.R.drawable.ic_menu_view)
                     .setContentTitle("Всегда рядом")
-                    .setContentText("Захват экрана активен. Открой 2ГИС, затем вернись и останови захват.")
-                    .setOngoing(true)
-                    .build();
+                    .setContentText("OCR: русский + English")
+                    .setOngoing(true).build();
         }
         return new Notification.Builder(this)
                 .setSmallIcon(android.R.drawable.ic_menu_view)
                 .setContentTitle("Всегда рядом")
-                .setContentText("Захват экрана активен.")
-                .setOngoing(true)
-                .build();
+                .setContentText("Распознавание экрана активно.")
+                .setOngoing(true).build();
     }
 
     private void createChannel() {
@@ -160,7 +209,8 @@ public class ScreenOcrService extends Service {
 
     @Override public void onDestroy() {
         stopCapture();
-        if (recognizer != null) recognizer.close();
+        modelReady = false;
+        if (tess != null) { tess.recycle(); tess = null; }
         if (thread != null) thread.quitSafely();
         super.onDestroy();
     }
