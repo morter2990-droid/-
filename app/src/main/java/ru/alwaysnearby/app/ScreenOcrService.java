@@ -20,7 +20,6 @@ import android.os.IBinder;
 import android.os.SystemClock;
 
 import androidx.annotation.Nullable;
-import androidx.core.app.NotificationCompat;
 
 import com.google.mlkit.vision.common.InputImage;
 import com.google.mlkit.vision.text.TextRecognition;
@@ -127,10 +126,18 @@ public class ScreenOcrService extends Service {
     }
 
     private Notification notification() {
-        return new NotificationCompat.Builder(this, CHANNEL)
+        if (Build.VERSION.SDK_INT >= 26) {
+            return new Notification.Builder(this, CHANNEL)
+                    .setSmallIcon(android.R.drawable.ic_menu_view)
+                    .setContentTitle("Всегда рядом")
+                    .setContentText("Захват экрана активен. Открой 2ГИС, затем вернись и останови захват.")
+                    .setOngoing(true)
+                    .build();
+        }
+        return new Notification.Builder(this)
                 .setSmallIcon(android.R.drawable.ic_menu_view)
                 .setContentTitle("Всегда рядом")
-                .setContentText("Захват экрана активен. Открой 2ГИС, затем вернись и останови захват.")
+                .setContentText("Захват экрана активен.")
                 .setOngoing(true)
                 .build();
     }
